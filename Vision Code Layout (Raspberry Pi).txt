@@ -1,0 +1,209 @@
+Vision Code Layout (Raspberry Pi)
+
+```
+vision/
+├── config.yaml
+├── camera_driver.py
+├── model.py
+├── infer.py
+├── vision_loop.py
+├── uploader.py
+├── utils.py
+└── weights/
+    └── yolov8n.pt
+```
+
+---
+
+# `config.yaml`
+
+
+
+```yaml
+camera:
+  width: 640
+  height: 480
+  fps: 30
+
+inference:
+  imgsz: 640
+  conf_threshold: 0.7
+  throttle_sec: 0.7
+  persistence_frames: 2
+
+network:
+  upload_url: "http://localhost:8000/image"
+
+device:
+  device_id: "rover-001"
+```
+
+---
+
+# `camera_driver.py`
+
+Lightweight, Pi-safe camera interface.
+
+```python
+import cv2
+
+class Camera:
+    def __init__(self, width, height):
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+    def read(self):
+        ret, frame = self.cap.read()
+        if not ret:
+            return None
+        return frame
+
+    def release(self):
+        self.cap.release()
+```
+
+---
+
+# `model.py`
+
+Model loads once
+
+```python
+from ultralytics import YOLO
+
+class YOLOModel:
+    def __init__(self, weight_path):
+        self.model = YOLO(weight_path)
+        self.names = self.model.names
+
+    def infer(self, frame, imgsz, conf):
+        return self.model(frame, imgsz=imgsz, conf=conf, verbose=False)
+```
+
+---
+
+# `infer.py`
+
+Extract **only what is needed**
+
+```python
+def parse_detections(results, names):
+    detections = []
+
+    for r in results:
+        for box in r.boxes:
+            detections.append({
+                "label": names[int(box.cls)],
+                "confidence": float(box.conf)
+            })
+
+    return detections
+```
+
+---
+
+#`utils.py`
+
+Throttle + persistence logic.
+
+```python
+import time
+from collections import deque
+
+class InferenceGate:
+    def __init__(self, throttle_sec, persistence_frames):
+        self.throttle = throttle_sec
+        self.last_run = 0
+        self.buffer = deque(maxlen=persistence_frames)
+
+    def allow(self):
+        now = time.time()
+        if now - self.last_run >= self.throttle:
+            self.last_run = now
+            return True
+        return False
+
+    def confirm_detection(self, detected):
+        self.buffer.append(detected)
+        return all(self.buffer)
+```
+
+---
+
+#  `uploader.py`
+
+No blocking. Simple POST.
+
+```python
+import requests
+import base64
+import cv2
+from datetime import datetime
+
+def upload_image(frame, detections, config):
+    _, buffer = cv2.imencode(".jpg", frame)
+    encoded = base64.b64encode(buffer).decode()
+
+    payload = {
+        "device_id": config["device"]["device_id"],
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "image_format": "jpeg",
+        "image_data": encoded,
+        "defect_tags": [d["label"] for d in detections],
+        "confidence": max(d["confidence"] for d in detections)
+    }
+
+    requests.post(config["network"]["upload_url"], json=payload, timeout=2)
+```
+
+---
+
+# `vision_loop.py` (Main Runtime)
+
+This is the **heart of the system**.
+
+```python
+import yaml
+from camera_driver import Camera
+from model import YOLOModel
+from infer import parse_detections
+from utils import InferenceGate
+from uploader import upload_image
+
+# Load config
+with open("config.yaml") as f:
+    cfg = yaml.safe_load(f)
+
+# Init
+camera = Camera(cfg["camera"]["width"], cfg["camera"]["height"])
+model = YOLOModel("weights/yolov8n.pt")
+gate = InferenceGate(
+    cfg["inference"]["throttle_sec"],
+    cfg["inference"]["persistence_frames"]
+)
+
+print("Vision system online")
+
+while True:
+    frame = camera.read()
+    if frame is None:
+        continue
+
+    if not gate.allow():
+        continue
+
+    results = model.infer(
+        frame,
+        imgsz=cfg["inference"]["imgsz"],
+        conf=cfg["inference"]["conf_threshold"]
+    )
+
+    detections = parse_detections(results, model.names)
+
+    if detections:
+        if gate.confirm_detection(True):
+            upload_image(frame, detections, cfg)
+    else:
+        gate.confirm_detection(False)
+```
