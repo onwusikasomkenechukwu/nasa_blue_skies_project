@@ -22,16 +22,15 @@ All processing is performed on-device, with only validated results transmitted o
 Directory Structure
 
 ```
-vision/
-├── config.yaml          # Runtime configuration (no code changes needed)
-├── camera_driver.py     # Lightweight camera interface
-├── model.py             # YOLOv8 model wrapper (loads once)
-├── infer.py             # Minimal detection parsing
-├── utils.py             # Inference throttling + persistence logic
-├── uploader.py          # Non-blocking HTTP upload
-├── vision_loop.py       # Main runtime loop
-└── weights/
-    └── yolov8n.pt       # Trained YOLOv8n weights
+├── Diagram.png
+├── README.txt
+├── Vision Code Layout (Raspberry Pi).txt
+├── machinevision.py
+├── main.py
+├── rovermain.py
+├── phase1.py
+├── outline.txt
+└── requirements.txxt
 ```
 
 Each module has a single responsibility, allowing the system to scale or adapt to new hardware with minimal refactoring.
@@ -54,61 +53,100 @@ Key settings include:
 This configuration-driven approach enables rapid adaptation to different lighting conditions, surfaces, and power budgets.
 
 ---
+File Descriptions
 
-Core Components
+`Diagram.png`
 
-Camera Interface (`camera_driver.py`)
+High-level system diagram illustrating:
 
-* Uses OpenCV for direct camera access
-* Explicitly sets resolution to avoid CPU overload
-* Designed to fail gracefully if frames cannot be read
+* Rover and drone roles
+* Sensor placement
+* Data flow between vision, control, and backend systems
 
-Model Wrapper (`model.py`)
-
-* Loads YOLOv8n weights once at startup
-* Prevents repeated initialization and memory fragmentation
-* Abstracts model internals from the rest of the system
-
-Detection Parsing (`infer.py`)
-
-* Extracts only essential information:
-
-  * Class label
-  * Confidence score
-* Avoids passing large tensors or raw model outputs downstream
-
-Inference Control (`utils.py`)
-
-Implements two key reliability mechanisms:
-
-* **Inference throttling**: Limits how often inference runs to prevent CPU saturation and thermal throttling
-* **Temporal persistence**: Requires detections to appear across multiple frames before being confirmed
-
-This trades latency for improved confidence and robustness.
-
-Upload Interface (`uploader.py`)
-
-* Encodes images as JPEG and Base64
-* Sends compact JSON payloads via HTTP POST
-* Enforces timeouts to prevent blocking the main loop
-
-Only confirmed detections are transmitted, conserving bandwidth and backend resources.
+Used for documentation, presentations, and design reviews.
 
 ---
 
-Main Runtime Loop (`vision_loop.py`)
+`Vision Code Layout (Raspberry Pi).txt`
 
-`vision_loop.py` orchestrates the entire pipeline:
+Describes the **intended modular vision architecture** for the Raspberry Pi deployment, including:
 
-1. Capture frame
-2. Check inference throttle
-3. Run YOLO inference
-4. Parse and validate detections
-5. Upload confirmed results
+* Camera driver
+* YOLO model wrapper
+* Inference throttling and persistence
+* Network upload logic
 
-The loop is event-driven, not frame-driven, ensuring predictable behavior and long-term stability during continuous operation.
+This file serves as a software design reference and target architecture for refactoring existing scripts into a clean module-based system.
 
 ---
+
+`machinevision.py`
+
+Prototype implementation of the **computer vision pipeline**, including:
+
+* Camera capture
+* YOLO-based inference
+* Initial detection logic
+
+This file is used for early testing and validation of model performance on embedded hardware.
+
+---
+
+`main.py`
+
+Primary entry point for general system testing and integration.
+
+Responsibilities may include:
+
+* Initializing vision components
+* Running test loops
+* Verifying runtime behavior during development
+
+This file is expected to evolve as modules are finalized.
+
+---
+
+`rovermain.py`
+
+Rover-specific runtime script.
+
+Intended responsibilities:
+
+* Integrating vision with rover motion control
+* Handling rover state and safety logic
+* Coordinating inspection behavior while attached to aircraft surfaces
+
+This file separates rover logic from drone or general-purpose testing code.
+
+---
+
+`phase1.py`
+
+Implements Phase 1 system objectives, including:
+
+* Proof-of-concept vision functionality
+* Basic inspection workflow
+* Early integration testing
+
+Used to track progress against project milestones and deliverables.
+
+---
+
+`outline.txt`
+
+Development planning document outlining:
+
+* Project phases
+* Feature priorities
+* Future integration steps
+
+Serves as a roadmap for continued development.
+
+---
+
+`requirements.txxt`
+
+Lists Python dependencies required to run the software.
 
 Model Details
 
@@ -167,5 +205,6 @@ Notes
 * This pipeline is shared between rover and drone platforms
 * Backend endpoints are assumed to be available but are decoupled from vision logic
 * The system is designed to scale to higher-performance hardware (e.g., Jetson Nano) with minimal changes
+
 
 ---
