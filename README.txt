@@ -69,7 +69,7 @@ Used for documentation, presentations, and design reviews.
 
 `Vision Code Layout (Raspberry Pi).txt`
 
-Describes the **intended modular vision architecture** for the Raspberry Pi deployment, including:
+Describes the intended modular vision architecture for the Raspberry Pi deployment, including:
 
 * Camera driver
 * YOLO model wrapper
@@ -82,7 +82,7 @@ This file serves as a software design reference and target architecture for refa
 
 `machinevision.py`
 
-Prototype implementation of the **computer vision pipeline**, including:
+Prototype implementation of the computer vision pipeline, including:
 
 * Camera capture
 * YOLO-based inference
@@ -208,3 +208,4 @@ Notes
 
 
 ---
+
