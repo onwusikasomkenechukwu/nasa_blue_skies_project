@@ -1,0 +1,297 @@
+Vision Code Layout (Raspberry Pi) - Initial Draft
+
+
+├── config.yaml
+├── camera_driver.py
+├── detector.py          
+├── preprocess.py       
+├── infer.py             
+├── decision.py          
+├── uploader.py
+├── utils.py
+├── vision_loop.py
+└── weights/
+    └── yolov8n.pt
+
+
+---
+
+# `config.yaml`
+
+
+
+```yaml
+camera:
+  width: 640
+  height: 480
+  fps: 30
+
+inference:
+  imgsz: 640
+  conf_threshold: 0.35
+  throttle_sec: 0.6
+  persistence_frames: 2
+
+network:
+  upload_url: "http://localhost:8000/image"
+
+device:
+  device_id: "rover-001"
+
+```
+
+---
+
+# `camera_driver.py`
+
+Lightweight, Pi-safe camera interface.
+
+```
+import cv2
+
+class Camera:
+    def __init__(self, width, height):
+        self.cap = cv2.VideoCapture(0)
+        self.cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+        self.cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+
+    def read(self):
+        ret, frame = self.cap.read()
+        if not ret:
+            return None
+        return frame
+
+    def release(self):
+        self.cap.release()
+
+```
+----------------
+#detector.py
+#detector module
+
+from ultralytics import YOLO
+import cv2
+
+
+
+class YOLOv8Detector:
+    def __init__(self, model_path, conf, device):
+        self.model = YOLO(model_path)
+        self.model.to(device)
+        self.conf = conf
+
+    def detect(self, frame, imgsz):
+        results = self.model(
+            frame,
+            conf=self.conf,
+            imgsz=imgsz,
+            verbose=False
+        )
+        return results[0]
+
+
+    def draw(self, frame, detections):
+        for box in detections.boxes:
+            x1, y1, x2, y2 = map(int, box.xyxy[0])
+            cls = int(box.cls[0])
+            conf = float(box.conf[0])
+
+            label = f"{self.model.names[cls]} {conf:.2f}"
+            cv2.rectangle(frame, (x1,y1), (x2,y2), (0,255,0), 2)
+            cv2.putText(
+                frame, label, (x1, y1-5),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.5, (0,255,0), 1
+            )
+        return frame
+---
+
+# 'preprocess.py'
+import cv2
+
+def preprocess(frame):
+    lab = cv2.cvtColor(frame, cv2.COLOR_BGR2LAB)
+    l, a, b = cv2.split(lab)
+
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+    l = clahe.apply(l)
+
+    return cv2.merge((l, a, b))
+
+
+
+---
+
+# `infer.py`
+
+Extract **only what is needed**
+
+```
+def parse_detections(result, names):
+    detections = []
+
+    for box in result.boxes:
+        detections.append({
+            "label": names[int(box.cls)],
+            "confidence": float(box.conf),
+            "bbox": list(map(int, box.xyxy[0]))
+        })
+
+    return detections
+
+```
+
+
+#decision.py
+
+------
+
+class VisionDecision:
+    def __init__(self, rover):
+        self.rover = rover
+
+    def handle(self, detections):
+        if detections:
+            self.rover.stop()
+            return "DEFECT"
+        else:
+            self.rover.move_forward(45)
+            return "CLEAR"
+
+
+------
+---
+
+#`utils.py`
+
+Throttle + persistence logic.
+
+```
+import time
+from collections import deque
+
+class InferenceGate:
+    def __init__(self, throttle_sec, persistence_frames):
+        self.throttle = throttle_sec
+        self.last_run = 0
+        self.buffer = deque(maxlen=persistence_frames)
+
+    def allow(self):
+        now = time.time()
+        if now - self.last_run >= self.throttle:
+            self.last_run = now
+            return True
+        return False
+
+    def confirm_detection(self, detected):
+        self.buffer.append(detected)
+        return all(self.buffer)
+
+```
+
+---
+
+#  `uploader.py`
+
+No blocking. Simple POST.
+
+```
+import requests
+import base64
+import cv2
+from datetime import datetime
+
+def upload_image(frame, detections, config):
+    _, buffer = cv2.imencode(".jpg", frame)
+    encoded = base64.b64encode(buffer).decode()
+
+    payload = {
+        "device_id": config["device"]["device_id"],
+        "timestamp": datetime.utcnow().isoformat() + "Z",
+        "image_format": "jpeg",
+        "image_data": encoded,
+        "defect_tags": [d["label"] for d in detections],
+        "confidence": max(d["confidence"] for d in detections)
+    }
+
+    requests.post(
+        config["network"]["upload_url"],
+        json=payload,
+        timeout=2
+    )
+
+```
+
+---
+
+# `vision_loop.py` (Main Runtime)
+
+This is the **heart of the system**.
+
+```
+import yaml
+from camera_driver import Camera
+from detector import YOLOv8Detector
+from preprocess import preprocess
+from infer import parse_detections
+from utils import InferenceGate
+from uploader import upload_image
+
+# Optional: only if running on rover
+# from rover.comms.mcu_bridge import MCUBridge
+# from rover.navigation.rover_planner import RoverPlanner
+# from decision import VisionDecision
+
+def main():
+    with open("config.yaml") as f:
+        cfg = yaml.safe_load(f)
+
+    camera = Camera(cfg["camera"]["width"], cfg["camera"]["height"])
+
+    detector = YOLOv8Detector(
+        model_path="weights/yolov8n.pt",
+        conf=cfg["inference"]["conf_threshold"],
+        device="cpu"  # "cuda" if Jetson
+    )
+
+    gate = InferenceGate(
+        cfg["inference"]["throttle_sec"],
+        cfg["inference"]["persistence_frames"]
+    )
+
+    print("Vision system online")
+
+    while True:
+        frame = camera.read()
+        if frame is None:
+            continue
+
+        frame = preprocess(frame)
+
+        if not gate.allow():
+            continue
+
+        result = detector.detect(frame, cfg["inference"]["imgsz"])
+        detections = parse_detections(result, detector.model.names)
+
+        if detections:
+            if gate.confirm_detection(True):
+                upload_image(frame, detections, cfg)
+        else:
+            gate.confirm_detection(False)
+
+if __name__ == "__main__":
+    main()
+
+```
+
+
+
+'''
+example
+Defect classes:
+- crack
+- corrosion
+- dent
+- paint_peel
+- fastener_missing
+'''

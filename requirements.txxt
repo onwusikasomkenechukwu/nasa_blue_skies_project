@@ -1,0 +1,10 @@
+numpy
+opencv-python
+torch
+torchvision
+pyserial
+pymavlink
+scipy
+ultralytics
+open3d
+
